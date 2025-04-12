@@ -1,11 +1,16 @@
 import { RouterProvider, createBrowserRouter } from "react-router-dom";
-import Login from "./Login";
-import Signup from "./SignUp";
-import Home from "./Home"; // Create this component if not present
-import NotFound from "./NotFound"; // Create this component
+import Login from "./login";
+import Signup from "./signup"
+import Home from "./Home"; 
+import NotFound from "./NotFound";
 import Dashboard from "./Dashboard";
-import RecommendedJobs from "./RecommendedJobs";
+import LearningPath from "./LearningPath";
+import Settings from "./Settings";
+import Resume from "./Resume";
+import JobMatches from "./JobMatches";
 import './App.css';
+import About from "./About";
+
 
 const router = createBrowserRouter([
   {
@@ -22,16 +27,34 @@ const router = createBrowserRouter([
   },
   {
     path: "*",
-    element: <NotFound />, // Catch-all route for 404 errors
+    element: <NotFound />, 
   },
   {
-    path: "recommended-jobs",
-    element: <RecommendedJobs />, // Catch-all route for 404 errors
+    path: "learning-path",
+    element: <LearningPath />,
   },
   {
     path: "/dashboard",
     element: <Dashboard/>
-  }
+  }, 
+  {
+    path: "/settings",
+    element: <Settings/>
+  },
+  {
+    path: "/resume",
+    element: <Resume/>
+  },
+  {
+    path: "/job-matches",
+    element: <JobMatches/>
+  },
+
+  {
+    path: "/about",
+    element: <About />,
+  },
+
 ]);
 
 function App() {
