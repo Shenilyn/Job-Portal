@@ -25,6 +25,11 @@ const Login = () => {
         }
     };
 
+    // Function to navigate to the home page
+    const handleGoHome = () => {
+        navigate("/");
+    };
+
     return (
         <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100">
             <div className="w-full max-w-md bg-white p-10 rounded-lg shadow-md">
@@ -61,6 +66,14 @@ const Login = () => {
                         Login
                     </button>
                 </form>
+
+                {/* Button to navigate to the home page */}
+                <button
+                    onClick={handleGoHome}
+                    className="mt-4 w-full bg-gray-500 text-white py-2 rounded-md hover:bg-gray-600 transition"
+                >
+                    Go to Home
+                </button>
             </div>
         </div>
     );

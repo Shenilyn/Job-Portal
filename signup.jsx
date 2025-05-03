@@ -64,15 +64,33 @@ const Signup = () => {
     };
     
     const handleGoogleSignup = async () => {
-        try {
-            await signInWithPopup(auth, googleProvider);
-            console.log("Google Account Connected");
-            navigate("/dashboard"); // Redirect to dashboard after successful Google signup
-        } catch (error) {
-            console.error("Google Sign-up Error:", error.message);
-            alert(`Google signup failed: ${error.message}`);
+    try {
+        const userCredential = await signInWithPopup(auth, googleProvider);
+        const user = userCredential.user;
+
+        if (user) {
+            // Ensure authentication before proceeding
+            await user.reload(); // Refresh user details
+            const refreshedUser = auth.currentUser;
+
+            if (refreshedUser.emailVerified) {
+                console.log("Google Account Connected and Email Verified");
+                navigate("/dashboard");
+            } else {
+                console.log("Email needs to be verified.");
+                alert("Please verify your Google account email before proceeding.");
+                navigate("/verifyEmail");
+            }
+        } else {
+            console.error("User not authenticated properly.");
         }
-    };
+    } catch (error) {
+        console.error("Google Sign-up Error:", error.message);
+        alert(`Google signup failed: ${error.message}`);
+    }
+};
+
+    
     
     return (
         <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100">
