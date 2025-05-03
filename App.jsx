@@ -12,6 +12,7 @@ import './App.css';
 import About from "./About";
 import Privacy from "./privacy"; 
 import Terms from "./terms"; 
+import Contact from "./contact";
 import VerifyEmail from "./verifyEmail"; // Import the verification page
 
 const router = createBrowserRouter([
@@ -65,9 +66,12 @@ const router = createBrowserRouter([
   },
   {
     path: "/terms",
-    element: <Terms />, // Route for the Privacy Policy page
+    element: <Terms />, 
   },
-  
+  {
+    path: "/contact",
+    element: <Contact />, 
+  },
 ]);
 
 function App() {

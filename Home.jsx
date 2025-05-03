@@ -313,7 +313,9 @@ function Home() {
               <h4 className="text-lg font-semibold mb-4">About Us</h4>
               <ul className="space-y-2">
               
-                <li><a href="#" className="text-gray-400 hover:text-white">Contact</a></li>
+              <p className="text-gray-700 mt-4">
+               <Link to="/contact" className="text-blue-500 hover:underline">Contact Us</Link>
+              </p>
                 <p className="text-gray-700 mt-4">
                <Link to="/privacy" className="text-blue-500 hover:underline">Privacy Policy</Link>
               </p>

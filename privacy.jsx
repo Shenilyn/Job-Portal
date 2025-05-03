@@ -37,7 +37,7 @@ const Privacy = () => {
 
       <h2 className="text-2xl font-semibold mt-6">4. Third-Party Sharing</h2>
       <p className="text-gray-700 mt-2">
-        We do **not** sell, trade, or share your personal information with third parties without your consent. However, we may share anonymized data to improve our AI models.
+        We do <strong>not</strong> sell, trade, or share your personal information with third parties without your consent. However, we may share anonymized data to improve our AI models.
       </p>
 
       <h2 className="text-2xl font-semibold mt-6">5. Your Rights and Choices</h2>
