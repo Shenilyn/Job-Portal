@@ -6,6 +6,7 @@ import Krisha from './assets/krisha.jpg';
 import Shen from './assets/shen.png';
 import Gerald from './assets/gerald.jpg';
 
+
 const About = () => {
      const navigate = useNavigate();
   return (
