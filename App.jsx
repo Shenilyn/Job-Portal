@@ -11,6 +11,7 @@ import JobMatches from "./JobMatches";
 import './App.css';
 import About from "./About";
 import Privacy from "./privacy"; 
+import Terms from "./terms"; 
 import VerifyEmail from "./verifyEmail"; // Import the verification page
 
 const router = createBrowserRouter([
@@ -61,6 +62,10 @@ const router = createBrowserRouter([
   {
     path: "/privacy",
     element: <Privacy />, // Route for the Privacy Policy page
+  },
+  {
+    path: "/terms",
+    element: <Terms />, // Route for the Privacy Policy page
   },
   
 ]);

@@ -1,4 +1,5 @@
 import React from "react";
+import { Link } from "react-router-dom";
 
 const Privacy = () => {
   return (
@@ -56,8 +57,11 @@ const Privacy = () => {
 
       <h2 className="text-2xl font-semibold mt-6">7. Contact Us</h2>
       <p className="text-gray-700 mt-2">
-        For any concerns or inquiries regarding your privacy, feel free to contact us at <strong>jobsyncra@gmail.com</strong>.
-      </p>
+  For any concerns or inquiries regarding your privacy, feel free to contact us at 
+  <strong className="text-blue-500"> jobsyncra@gmail.com </strong>.
+</p>
+
+
 
       <p className="mt-6 text-gray-500 text-sm">
         Last updated: {new Date().toLocaleDateString()}

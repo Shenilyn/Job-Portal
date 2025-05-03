@@ -314,8 +314,13 @@ function Home() {
               <ul className="space-y-2">
               
                 <li><a href="#" className="text-gray-400 hover:text-white">Contact</a></li>
-                <li><a href="#" className="text-gray-400 hover:text-white">Privacy Policy</a></li>
-                <li><a href="#" className="text-gray-400 hover:text-white">Terms of Service</a></li>
+                <p className="text-gray-700 mt-4">
+               <Link to="/privacy" className="text-blue-500 hover:underline">Privacy Policy</Link>
+              </p>
+
+              <p className="text-gray-700 mt-4">
+               <Link to="/terms" className="text-blue-500 hover:underline">Terms & Conditions</Link>
+              </p>
                 <li><a href="#" className="text-gray-400 hover:text-white">FAQ</a></li>
               </ul>
             </div>
