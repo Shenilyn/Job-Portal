@@ -27,7 +27,22 @@ const Signup = () => {
         if (!email || !password) {
             alert("Please enter both email and password.");
             return;
+        } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || /\s/.test(email)) {
+            alert("Please enter a valid email address without spaces.");
+            return;
+        } else if (/\s/.test(password)) {
+            alert("Password must not contain any spaces.");
+            return;
+        } else if (
+            password.length < 8 || 
+            !/[A-Z]/.test(password) || 
+            !/[a-z]/.test(password) || 
+            !/[^A-Za-z0-9]/.test(password)
+        ) {
+            alert("Password must be at least 8 characters long, contain at least one uppercase letter, one lowercase letter, and one special character.");
+            return;
         }
+        
     
         try {
             const userCredential = await createUserWithEmailAndPassword(auth, email, password);
