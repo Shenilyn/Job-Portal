@@ -46,18 +46,38 @@ const Sidebar = () => {
               {item.name}
             </Link>
           ))}
+          
         </div>
         
         {/* Logout button positioned at the absolute bottom of sidebar */}
-        <button 
-          onClick={handleLogout}
-          className="absolute bottom-0 left-0 w-full px-6 py-4 text-red-600 hover:bg-red-50 transition-all duration-200 font-medium flex items-center bg-white border-t border-gray-200"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-          </svg>
-          Logout
-        </button>
+        {/* Button Before Logout */}
+        <div className="mt-auto flex flex-col gap-2">
+  {/* JobSyncra AI Button */}
+          <button
+            className={`w-full flex items-center px-6 py-3 transition-all duration-200 ease-in-out text-left ${
+              currentPath === "/job-syncra-ai"
+                ? "bg-blue-100 text-blue-800 font-semibold border-l-4 border-blue-500"
+                : "hover:bg-blue-50 hover:text-blue-600 hover:border-l-4 hover:border-blue-500"
+            } cursor-pointer`}
+            onClick={() => window.open("http://localhost:5173/", "_blank")}
+          >
+            <img src="/JSAIchat.png" alt="JobSyncra Logo" className="h-8 w-8 mr-2" />
+            <span className="text-sm font-medium">Go to JobSyncra AI</span> {/* Larger Text */}
+          </button>
+
+          {/* Logout Button */}
+          <button 
+            onClick={handleLogout}
+            className="w-full px-6 py-4 text-red-600 hover:bg-red-50 transition-all duration-200 font-medium flex items-center bg-white border-t border-gray-200"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+            </svg>
+            Logout
+          </button>
+        </div>
+
+
       </div>
       
       {/* Main content area with left margin to prevent sidebar overlap */}
