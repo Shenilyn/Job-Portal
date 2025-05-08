@@ -1,537 +1,733 @@
-# type: ignore
-from tensorflow.keras.models import load_model  # type: ignore
-
 import os
 import numpy as np
-import tensorflow as tf
+import pickle
 import json
-import requests
-from dotenv import load_dotenv
-import pandas as pd
 import pdfplumber
 import docx
-import pickle
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.ensemble import RandomForestClassifier
+import re
 
-# Load environment variables (for API keys)
-load_dotenv()
 
+app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload size
+app.config['UPLOAD_FOLDER'] = 'uploads'
+CORS(app)  # Enable CORS for all routes
 class JobRecommendationSystem:
-    def __init__(self, model_path="model/model3.h5", vectorizer_path="vectorizer.pkl", 
+    def __init__(self, model_path="job_recommendation_model.pkl", vectorizer_path="vectorizer.pkl", 
                  job_mapping_path="job_titles.json"):
-        """
-        Initialize the Job Recommendation System.
+        """Initialize the Job Recommendation System."""
+        self.use_fallback = False
         
-        Args:
-            model_path (str): Path to the trained model file
-            vectorizer_path (str): Path to the trained TF-IDF vectorizer
-            job_mapping_path (str): Path to the job title mapping JSON file
-        """
-        # Check if model file exists
-        if not os.path.exists(model_path):
-            print(f"Model file not found at: {model_path}")
-            print("Please check if the file exists and the path is correct.")
-            raise FileNotFoundError(f"Model file not found: {model_path}")
-            
-        # Verify model file size
-        model_size = os.path.getsize(model_path)
-        if model_size < 1000:  # Very small file, likely not a valid model
-            print(f"Warning: Model file is very small ({model_size} bytes). It may be corrupted.")
-            
-        # Load the model
+        # Try to load the model
         try:
-            print(f"Attempting to load model from {model_path}...")
-            self.model = load_model(model_path)
-            print(f"Model loaded successfully from {model_path}")
+            if os.path.exists(model_path):
+                with open(model_path, 'rb') as f:
+                    self.model = pickle.load(f)
+                print(f"Model loaded successfully from {model_path}")
+            else:
+                print(f"Model file not found: {model_path}. Creating new model.")
+                self.model = self._create_default_model()
+                # Save the new model
+                with open(model_path, 'wb') as f:
+                    pickle.dump(self.model, f)
+                print(f"New model created and saved to {model_path}")
         except Exception as e:
-            print(f"Error loading model: {e}")
-            print("\nPossible issues:")
-            print("1. The file is not a valid TensorFlow model")
-            print("2. The model was saved with a different TensorFlow version")
-            print("3. The file is corrupted")
-            print("\nTry recreating your model and saving it again.")
-            raise
+            print(f"Error with model: {e}")
+            print("Creating new model instead...")
+            self.model = self._create_default_model()
+            # Try to save the new model
+            try:
+                with open(model_path, 'wb') as f:
+                    pickle.dump(self.model, f)
+                print(f"New model saved to {model_path}")
+            except Exception as save_e:
+                print(f"Couldn't save new model: {save_e}")
 
-        # Load the trained TF-IDF vectorizer
+        # Try to load the vectorizer
         try:
-            with open(vectorizer_path, "rb") as f:
-                self.vectorizer = pickle.load(f)
-            print("TF-IDF vectorizer loaded successfully.")
+            if os.path.exists(vectorizer_path):
+                with open(vectorizer_path, "rb") as f:
+                    self.vectorizer = pickle.load(f)
+                print(f"Vectorizer loaded successfully from {vectorizer_path}")
+            else:
+                print(f"Vectorizer file not found: {vectorizer_path}. Creating new vectorizer.")
+                self.vectorizer = TfidfVectorizer(max_features=5000, stop_words='english')
+                # Since a new vectorizer needs training data, make sure it's fit on some sample data
+                sample_data = ["Sample resume text for software development and programming",
+                              "Sample resume for data science with machine learning experience",
+                              "Sample resume for management and leadership positions"]
+                self.vectorizer.fit(sample_data)
+                # Save the new vectorizer
+                with open(vectorizer_path, 'wb') as f:
+                    pickle.dump(self.vectorizer, f)
+                print(f"New vectorizer created and saved to {vectorizer_path}")
         except Exception as e:
-            print(f"Error loading vectorizer: {e}")
-            raise
+            print(f"Error with vectorizer: {e}")
+            print("Creating new vectorizer instead...")
+            self.vectorizer = TfidfVectorizer(max_features=5000, stop_words='english')
+            # Fit on sample data
+            sample_data = ["Sample resume text for software development and programming",
+                          "Sample resume for data science with machine learning experience",
+                          "Sample resume for management and leadership positions"]
+            self.vectorizer.fit(sample_data)
+            # Try to save the new vectorizer
+            try:
+                with open(vectorizer_path, 'wb') as f:
+                    pickle.dump(self.vectorizer, f)
+                print(f"New vectorizer saved to {vectorizer_path}")
+            except Exception as save_e:
+                print(f"Couldn't save new vectorizer: {save_e}")
             
-        # Load job title mapping
+        # Load or create job title mapping - expanded with additional job categories from JS code
         try:
             if os.path.exists(job_mapping_path):
                 with open(job_mapping_path, "r") as f:
                     self.job_titles = json.load(f)
-                print(f"Job titles mapping loaded successfully from {job_mapping_path}")
+                print(f"Job titles loaded from {job_mapping_path}")
             else:
-                # Create a default mapping if file doesn't exist
-                print(f"Job mapping file not found at {job_mapping_path}. Using default indices.")
-                self.job_titles = {str(i): f"Job Category {i+1}" for i in range(self.model.output_shape[1])}
+                self.job_titles = {
+                    "0": "Data Scientist",
+                    "1": "Software Engineer",
+                    "2": "Product Manager",
+                    "3": "UX Designer",
+                    "4": "DevOps Engineer",
+                    "5": "Chef",
+                    "6": "Marketing Manager",
+                    "7": "Sales Representative",
+                    "8": "Project Manager", 
+                    "9": "Financial Analyst",
+                    "10": "Accountant",
+                    "11": "Legal Counsel",
+                    "12": "Agricultural Manager",
+                    "13": "Fashion Designer"
+                }
+                with open(job_mapping_path, "w") as f:
+                    json.dump(self.job_titles, f, indent=2)
+                print(f"Default job titles created and saved to {job_mapping_path}")
         except Exception as e:
-            print(f"Error loading job titles: {e}")
-            # Fallback mapping
-            self.job_titles = {str(i): f"Job Category {i+1}" for i in range(self.model.output_shape[1])}
+            print(f"Error with job titles: {e}")
+            self.job_titles = {
+                "0": "Data Scientist",
+                "1": "Software Engineer",
+                "2": "Product Manager",
+                "3": "UX Designer",
+                "4": "DevOps Engineer",
+                "5": "Chef",
+                "6": "Marketing Manager",
+                "7": "Sales Representative",
+                "8": "Project Manager",
+                "9": "Financial Analyst",
+                "10": "Accountant",
+                "11": "Legal Counsel",
+                "12": "Agricultural Manager",
+                "13": "Fashion Designer",
+                "14": "Pastry Chef",
+                "15": "Executive Chef",
+                "16": "Sous Chef",
+                "17": "Garde Manger Chef",
+                "18": "Private Chef",
+                "19": "Nutritionist Chef",
+                "20": "Cruise Ship Chef",
+                "21": "Consultant Chef",
+                "22": "Saucier Chef",
+                "23": "Graphic Designer",
+                "24": "Interior Designer",
+                "25": "Industrial Designer",
+                "26": "Game Designer",
+                "27": "Web Designer",
+                "28": "Floral Designer",
+                "29": "Tax Accountant",
+                "30": "Auditor",
+                "31": "Forensic Accountant",
+                "32": "Financial Accountant",
+                "33": "Cost Accountant",
+                "34": "Management Accountant",
+                "35": "Payroll Accountant",
+                "36": "Government Accountant",
+                "37": "Investment Accountant",
+                "38": "CPA (Certified Public Accountant)"
+            }
+            print("Using default job titles without saving")
+            
+        # Initialize skill dictionaries
+        self._initialize_skill_mappings()
 
-        # Initialize API keys and endpoints
-        self.gemini_api_key = os.environ.get("VITE_GEMINI_API_KEY")
-        if not self.gemini_api_key:
-            print("Warning: VITE_GEMINI_API_KEY not found in environment variables")
-        self.gemini_api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent"
+    def _initialize_skill_mappings(self):
+        """Initialize the skill mappings for job categories"""
+        # Define skills for each job title
+        self.job_skills = {
+            "Data Scientist": ["python", "sql", "data visualization", "statistics", "analytics", 
+                              "data analysis", "pandas", "numpy", "sklearn", "tensorflow", "visualization", 
+                              "jupyter", "ai", "artificial intelligence", "algorithms", "statistical", 
+                              "big data", "data mining", "database", "deep learning", "nlp", "tableau",
+                              "power bi", "machine learning", "r", "spss", "matlab", "data science"],
+                              
+            "Software Engineer": ["software", "programming", "development", "java", "python", "javascript", 
+                                 "code", "algorithm", "api", "web", "full stack", "backend", "frontend", 
+                                 "app", "mobile", "cloud", "github", "git", "debugging", "testing", "agile", 
+                                 "software design", "object oriented", "oop", "react", "angular", "node",
+                                 "c++", "c#", "php", ".net", "ruby", "scala", "rust", "go", "azure", "aws",
+                                 "devops", "microservices", "rest api", "graphql"],
+                                 
+            "Product Manager": ["product", "management", "strategy", "roadmap", "agile", "scrum", "user experience", 
+                               "prioritization", "stakeholder", "business", "customer", "market research", 
+                               "feature", "specification", "project management", "competitive analysis", 
+                               "product development", "launch", "requirements", "backlog", "jira",
+                               "product owner", "mvp", "user stories", "product vision", "a/b testing",
+                               "product metrics", "okrs", "sprint planning", "user feedback", "product lifecycle"],
+                               
+            "UX Designer": ["design", "user experience", "ux", "ui", "wireframe", "prototype", "usability", 
+                          "sketch", "figma", "adobe", "visual design", "interaction", "user research", 
+                          "interface", "accessibility", "information architecture", "design thinking", 
+                          "user testing", "storyboard", "persona", "user journey", "creative", "adobe xd",
+                          "invision", "zeplin", "typography", "color theory", "user interface", "responsive design"],
+                          
+            "DevOps Engineer": ["devops", "ci/cd", "pipeline", "aws", "cloud", "docker", "kubernetes", 
+                               "infrastructure", "linux", "automation", "jenkins", "terraform", "ansible", 
+                               "monitoring", "deployment", "configuration", "security", "networking", 
+                               "containers", "microservices", "git", "continuous integration", "azure", "gcp",
+                               "prometheus", "grafana", "puppet", "chef", "bash", "scripting", "nginx", "apache"],
+                               
+            "Chef": ["culinary", "cooking", "chef", "kitchen", "food", "recipe", "cuisine", "baking", 
+                    "pastry", "catering", "restaurant", "menu", "sous chef", "head chef", "executive chef", 
+                    "food preparation", "gastronomy", "hospitality", "nutrition", "food safety", "culinary arts", 
+                    "buffet", "food service", "meal planning", "fine dining", "saute", "grill", "taste", 
+                    "flavor", "ingredients", "dietary", "butchery", "garde manger", "banquet"],
+
+            "Pastry Chef": ["desserts", "baking", "patisserie", "confectionery", "sweet treats", "pastry arts", "cake decorating", 
+                            "fondant", "ganache", "whisking", "meringue", "custard", "glazing", "sugar work", "chocolate tempering", 
+                            "artisan baking", "viennoiserie", "bread-making", "laminate dough", "torte", "proofing", "buttercream", 
+                            "caramelization", "flavor pairing", "plating", "food styling", "pastry techniques", "garde manger", 
+                            "dough preparation", "buffet", "banquet", "hospitality", "culinary arts", "food service", "meal planning", 
+                            "fine dining", "ingredients", "nutrition", "food safety", "gastronomy", "menu creation", 
+                            "executive pastry chef"],
+
+            "Executive Chef": ["menu creation", "kitchen management", "restaurant operations", "culinary leadership", "food safety", 
+                               "staff training", "inventory control", "cost management", "fine dining", "gastronomy"],
+
+            "SOUS Chef": ["food preparation", "team supervision", "kitchen coordination", "recipe execution", "menu development", 
+                          "culinary techniques", "restaurant service", "flavor balancing"],
+
+            "Garde Manger Chef": ["cold dishes", "appetizers", "charcuterie", "salads", "plating", "buffet", "banquet", "food styling", 
+                                  " food presentation", "flavor pairing"],
+
+            "Saucier Chef": ["sauces", "stocks", "braising", "saute", "reduction", "flavor infusion", "garnishing", "culinary techniques"],
+
+            "Private Chef": ["custom meal planning", "exclusive dining", "nutrition", "dietary cooking", "personalized recipes", "high-end dining", 
+                             "seasonal ingredients"],
+
+            "Nutritionist Chef": ["healthy cooking", "diet planning", "balanced meals", "nutritional science"],
+
+            "Cruise Ship Chef": ["international cuisine", "buffet service", "high-volume cooking", "cruise hospitality"],
+
+            "Consultant Chef": ["culinary consulting", "menu optimization", "restaurant efficiency", "food innovation", "business development"],
+
+            "Marketing Manager": ["marketing", "strategy", "brand", "social media", "market research", 
+                                 "campaigns", "digital marketing", "marketing strategy", "customer relations", 
+                                 "analytics", "advertising", "seo", "content marketing", "marketing automation",
+                                 "branding", "marketing campaign", "email marketing", "lead generation", 
+                                 "content strategy", "marketing analytics", "google analytics", "ppc", "sem", 
+                                 "cro", "copywriting", "marketing communications", "public relations"],
+                                 
+            "Sales Representative": ["sales", "business development", "customer acquisition", "account management", 
+                                    "negotiation", "client relations", "pipeline", "crm", "quotas", "leads", 
+                                    "prospecting", "sales strategy", "b2b", "b2c", "relationship management",
+                                    "sales funnel", "closing deals", "sales pitch", "cold calling", "salesforce",
+                                    "sales forecasting", "territory management", "customer success", "solution selling", 
+                                    "consultative selling", "sales presentations"],
+                                    
+            "Project Manager": ["project management", "team leadership", "project planning", "stakeholder management", 
+                               "budgeting", "agile", "scrum", "waterfall", "project delivery", "resource management", 
+                               "timelines", "risk management", "pmp", "strategic planning", "jira", "ms project",
+                               "project coordination", "change management", "project scheduling", "project documentation",
+                               "requirements gathering", "issue tracking", "critical path", "status reporting",
+                               "project lifecycle", "kanban", "sprint planning"],
+                               
+            "Financial Analyst": ["financial analysis", "excel", "finance", "accounting", "reporting", "financial modeling", 
+                                 "forecasting", "budgeting", "investment", "valuation", "financial statements", 
+                                 "business analysis", "sap", "financial planning", "data analysis", "balance sheet",
+                                 "income statement", "cash flow", "variance analysis", "profitability analysis",
+                                 "p&l", "kpi reporting", "financial metrics", "equity research", "business intelligence"],
+                                 
+            "Accountant": ["accounting", "bookkeeping", "financial reporting", "tax preparation", "quickbooks", 
+                          "auditing", "cpa", "general ledger", "accounts payable", "accounts receivable", 
+                          "reconciliation", "balance sheet", "income statement", "financial statements", "erp systems",
+                          "tax returns", "gaap", "fixed assets", "accruals", "journal entries", "month-end close",
+                          "payroll processing", "cash management", "cost accounting", "financial controls"],
+
+            "Tax Accountant": ["tax preparation", "tax compliance", "IRS regulations", "tax returns", "income tax", 
+                               "corporate tax", "sales tax", "tax deductions", "audit defense", "tax laws", "estate tax", 
+                               "financial statements", "GAAP", "tax strategy", "cost accounting"],
+
+            "Auditor": ["auditing", "internal controls", "financial compliance", "risk assessment", "forensic accounting", 
+                        "fraud detection", "regulatory reporting", "audit procedures", "GAAP", "financial statements", 
+                        "Sarbanes-Oxley", "account reconciliations"],
+
+            "Forensic Accountant": ["forensic accounting", "fraud investigation", "financial crime", "money laundering", 
+                                    "litigation support", "criminal investigations", "internal controls", "audit trails", 
+                                    "business valuation", "compliance auditing"],
+
+            "Financial Accountant": ["financial reporting", "balance sheet", "income statement", "GAAP", "IFRS", "general ledger", 
+                                     "financial analysis", "accounting software", "ERP systems", "financial controls", 
+                                     "month-end close", "fixed assets", "journal entries"],
+
+            "Cost Accountant": ["cost accounting", "budgeting", "variance analysis", "manufacturing costs", "profitability analysis", 
+                                "inventory valuation", "activity-based costing", "cost estimation", "financial forecasting", 
+                                "management accounting"],
+
+            "Management Accountant": ["financial planning", "strategic budgeting", "corporate finance", "cost analysis", 
+                                      "performance evaluation", "business strategy", "cash flow management", "profit and loss analysis", 
+                                      "investment analysis", "decision support"],
+
+            "Payroll Accountant": ["payroll processing", "salary calculations", "tax withholding", "employee benefits", 
+                                   "payroll compliance", "wage laws", "HR accounting", "tax filings", "account reconciliation", 
+                                   "cash management"],
+
+            "Government Accountant": ["public finance", "government budgeting", "federal accounting", "state financial regulations", 
+                                      "tax compliance", "grant accounting", "fund accounting", "GAO audits", "government contracts", 
+                                      "public sector finance"],
+
+            "Investment Accountant": ["investment reporting", "portfolio accounting", "financial instruments", "stock valuation", 
+                                      "hedge fund accounting", "risk assessment", "cash management", "bond accounting", 
+                                      "equity analysis", "fund administration"],
+
+            "CPA (Certified Public Accountant)": ["certification", "public accounting", "audit experience", "GAAP compliance", 
+                                                  "tax advising", "financial analysis", "consulting", "industry regulations", 
+                                                  "client accounting", "business finance"],
+                          
+            "Legal Counsel": ["legal", "law", "lawyer", "attorney", "legal research", "contract review", 
+                             "client consultation", "case management", "dispute resolution", "negotiation", 
+                             "legal compliance", "regulatory", "intellectual property", "litigation", "legal advice",
+                             "contracts", "legal documents", "legal analysis", "legal writing", "briefs", "counseling",
+                             "corporate law", "legal risk", "legal proceedings", "legal strategy"],
+                             
+            "Agricultural Manager": ["agriculture", "farming", "crop management", "agricultural operations", 
+                                    "soil science", "farm equipment", "livestock", "agronomy", "harvest", 
+                                    "irrigation", "sustainable farming", "agricultural research", "precision agriculture",
+                                    "cultivation", "fertilizer", "pesticides", "farm management", "agricultural economics",
+                                    "crop rotation", "farm equipment", "animal husbandry", "organic farming"],
+                                    
+            "Fashion Designer": ["fashion", "design", "apparel", "garment", "textile", "cad", "trend analysis", 
+                                "clothing", "collection", "fashion industry", "pattern making", "sketching", 
+                                "sustainable fashion", "product development", "merchandising", "sewing",
+                                "fashion trends", "fashion marketing", "couture", "retail", "fashion illustration",
+                                "textiles", "fabric selection", "color coordination", "fashion shows"],
+
+            "Graphic Designer": ["visual design", "branding", "typography", "illustration", "logo design", 
+                                 "layout", "vector art", "color theory", "digital media", "adobe creative suite", 
+                                 "print design", "UI/UX", "composition", "marketing design", "packaging", "infographics", 
+                                 "motion graphics", "web design", "photo editing"],
+
+            "Interior Designer": ["space planning", "aesthetics", "home decor", "furniture design", "lighting", "color theory", 
+                                  "architecture", "floor planning", "sustainable design", "CAD", "3D modeling", "materials selection", 
+                                  "design psychology", "functional spaces", "renovation", "real estate styling", "commercial interiors"],
+
+            "UX Designer": ["user experience", "wireframing", "prototyping", "interaction design", "usability testing", "design thinking", 
+                            "Figma", "Adobe XD", "UI components", "mobile design", "responsive design", "human-centered design", 
+                            "information architecture", "accessibility", "web design", "app development", "navigation design"],
+
+            "Industrial Designer": ["product design", "ergonomics", "prototyping", "materials science", "manufacturing processes", 
+                                    "CAD", "engineering aesthetics", "branding", "mechanical design", "3D rendering", 
+                                    "sustainable production", "concept development", "usability testing", "consumer products", 
+                                    "innovation", "design research"],
+
+            "Game Designer": ["game mechanics", "level design", "storyboarding", "interactive storytelling", "UI/UX for gaming", 
+                              "character design", "animation", "game engines", "3D modeling", "physics simulations", "world-building", 
+                              "game testing", "sound design", "narrative development", "virtual environments", "art direction"],
+
+            "Web Designer": ["HTML", "CSS", "JavaScript", "responsive design", "user interface", "CMS", "SEO optimization", 
+                             "front-end development", "wireframing", "animation", "color palettes", "page layout", "typography", 
+                             "e-commerce design", "branding", "digital marketing", "web performance"],
+
+            "Floral Designer": ["floral design", "flower arrangement", "bouquet crafting", "wedding florals", "event styling", 
+                                "botanical artistry", "color theory", "seasonal flowers", "plant care", "garden aesthetics", 
+                                "centerpieces", "floral foam", "horticulture", "flower preservation", "floral installations", 
+                                "floral retail", "floral trends", "sustainable floristry", "bridal bouquets", "corporate floral design", 
+                                "floral sculpture", "greenery styling", "custom arrangements", "flower markets", "indoor plants"]
+        }
+        
+        # Define missing skills for each job title
+        self.missing_skills_mapping = {
+            "Data Scientist": ["TensorFlow", "Big Data", "Cloud Platforms", "Deep Learning", "NLP"],
+            "Software Engineer": ["Kubernetes", "AWS", "CI/CD", "Microservices", "GraphQL"],
+            "Product Manager": ["Data Analysis", "Technical Knowledge", "Agile Certification", "Product Metrics"],
+            "UX Designer": ["Motion Design", "Design Systems", "Frontend Coding", "User Research"],
+            "DevOps Engineer": ["Kubernetes", "Terraform", "Cloud Architecture", "Security Automation"],
+            "Chef": ["Advanced Pastry", "International Cuisine", "Nutrition Science", "Menu Costing"],
+            "Pastry Chef": ["Advanced Baking", "Dessert Plating", "Sugar Crafting", "Chocolate Tempering"],
+            "Executive Chef": ["Menu Engineering", "Culinary Leadership", "Kitchen Operations", "Cost Control"],
+            "Sous Chef": ["Team Management", "Recipe Execution", "Kitchen Coordination", "Food Preparation"],
+            "Garde Manger Chef": ["Cold Dish Preparation", "Appetizer Crafting", "Charcuterie Techniques", "Food Styling"],
+            "Private Chef": ["Custom Meal Planning", "Exclusive Dining", "Dietary Adaptation", "Personalized Recipes"],
+            "Nutritionist Chef": ["Healthy Cooking", "Balanced Meals", "Diet Planning", "Nutritional Science"],
+            "Cruise Ship Chef": ["International Cuisine", "Buffet Management", "High-Volume Cooking", "Hospitality Operations"],
+            "Consultant Chef": ["Culinary Consulting", "Menu Optimization", "Restaurant Efficiency", "Food Innovation"],
+            "Saucier Chef": ["Sauce Creation", "Flavor Reduction", "Garnishing Techniques", "Culinary Infusion"],
+            "Marketing Manager": ["SEO", "Content Marketing", "Marketing Automation", "Analytics"],
+            "Sales Representative": ["Advanced Sales Techniques", "Industry Certifications", "Data Analysis"],
+            "Project Manager": ["Agile Methodologies", "Resource Optimization", "Strategic Planning"],
+            "Financial Analyst": ["Financial Modeling", "SAP", "Forecasting", "Data Visualization"],
+            "Accountant": ["CPA Certification", "ERP Systems", "Advanced Excel", "Financial Modeling"],
+            "Legal Counsel": ["Specialized Law Practice", "Negotiation", "Legal Tech Tools", "Dispute Resolution"],
+            "Agricultural Manager": ["Precision Agriculture", "AgriTech", "Sustainable Practices", "Supply Chain Management"],
+            "Fashion Designer": ["Sustainable Fashion", "3D Modeling", "Supply Chain", "E-commerce Integration"],
+            "Graphic Designer": ["Creative Direction", "Advanced Typography", "Marketing Strategy", "Data Visualization"],
+            "Interior Designer": ["Structural Design", "Real Estate Development", "Advanced CAD", "Building Codes"],
+            "UX Designer": ["Psychological Research", "AI Integration", "Voice UI Design", "Data Analytics"],
+            "Industrial Designer": ["Mechanical Engineering", "Material Chemistry", "Robotics Design", "Manufacturing Logistics"],
+            "Game Designer": ["AI Scripting", "3D Physics", "Advanced Animation", "Virtual Reality Development"],
+            "Web Designer": ["Cybersecurity", "Advanced JavaScript", "Database Management", "SEO Analytics"],
+            "Floral Designer": ["Advanced Flower Preservation", "Luxury Floral Branding", "Digital Floral Marketing", 
+        "3D Floral Sculpting", "Sustainable Floristry", "Business Management for Florists", "Wholesale Flower Sourcing", 
+        "Event Coordination", "Creative Concept Development", "Cross-disciplinary Design Integration", "AI-driven Floral Customization"],
+        "Tax Accountant": ["International Taxation", "Tax Law Interpretation", "Advanced Tax Strategy", "Cryptocurrency Tax Compliance"],
+        "Auditor": ["IT Auditing", "Cybersecurity Risk Assessment", "AI-driven Fraud Detection", "Government Regulatory Compliance"],
+        "Forensic Accountant": ["Blockchain Forensics", "Digital Financial Crime Investigation", "Legal Litigation Support", "Financial Profiling"],
+        "Financial Accountant": ["Integrated Reporting", "Financial Risk Management", "Predictive Analytics", "Advanced ERP Systems"],
+        "Cost Accountant": ["Lean Accounting", "Activity-Based Costing", "Advanced Budget Modeling", "Strategic Cost Reduction"],
+        "Management Accountant": ["Corporate Governance", "Behavioral Economics in Finance", "Leadership in Accounting", "Business Intelligence Tools"],
+        "Payroll Accountant": ["Payroll Tax Strategy", "HR Finance Integration", "Employee Compensation Analytics", "Automated Payroll Systems"],
+        "Government Accountant": ["Public Finance Transparency", "Federal Grant Reporting", "Municipal Finance Regulations", "Government Cost Allocation"],
+        "Investment Accountant": ["Portfolio Risk Analysis", "Hedge Fund Valuation", "Cryptocurrency Investment Accounting", "Global Securities Accounting"],
+        "CPA (Certified Public Accountant)": ["Advanced Advisory Services", "Public Trust Management", "Ethical Accounting Standards", "Cross-border Financial Regulations"]
+        }
+        
+        # Define companies for each job title
+        self.company_mapping = {
+           "Data Scientist": "Analytics Co.",
+      "Software Engineer": "Tech Innovations",
+      "Product Manager": "Product Innovations Inc.",
+      "UX Designer": "Creative Designs Inc.",
+      "DevOps Engineer": "Cloud Systems Inc.",
+      "Chef": "Culinary Innovations",
+      "Pastry Chef": "Le Cordon Bleu",
+      "Executive Chef": "The Ritz-Carlton",
+      "Sous Chef": "The Savoy",
+      "Garde Manger Chef": ["Hotel Banquets, ", "Cruise Line Dining"],
+      "Private Chef": ["Celebrity Residences, ", "Private Estates"],
+      "Nutritionist Chef": ["Hospitals, ", "Wellness Resorts"],
+      "Cruise Ship Chef": ["Royal Caribbean, ", "Carnival Cruise Line"],
+      "Consultant Chef": ["Restaurant Consulting Firms, ", "Hospitality Groups"],
+      "Saucier Chef": ["French Restaurants, ", "Steakhouses"],
+      "Marketing Manager": "Growth Strategies Inc.",
+      "Sales Representative": "Sales Experts Ltd.",
+      "Project Manager": "Enterprise Solutions",
+      "Financial Analyst": "Capital Management",
+      "Accountant": "Financial Solutions",
+      "Legal Counsel": "Corporate Legal Partners",
+      "Agricultural Manager": "FarmTech Solutions",
+      "Fashion Designer": "Trendsetter Apparel",
+      "Graphic Designer": ["Adobe, ", "Canva"],
+      "Interior Designer": ["IKEA, ", "Gensler"],
+      "UX Designer": ["Google, ", "Meta, ", "Microsoft, ", "Apple, ", "Amazon, ", "IBM, ", "Figma, ", "Adobe XD, ", "Spotify, ", "Salesforce"],
+      "Industrial Designer": ["Tesla, ", "IDEO"],
+      "Game Designer": ["Nintendo, ", "Ubisoft"],
+      "Floral Designer": "Farmgirl Flowers",
+      "Web Designer": ["Wix, ", "Squarespace, ", "WordPress, ", "Shopify, ", "Google"],
+      "Tax Accountant": ["Deloitte"],
+        "Auditor": ["PwC (PricewaterhouseCoopers)"],
+        "Forensic Accountant": ["Kroll"],
+        "Financial Accountant": ["EY (Ernst & Young)"],
+        "Cost Accountant": ["Caterpillar Inc."],
+        "Management Accountant": ["IBM"],
+        "Payroll Accountant": ["ADP"],
+        "Government Accountant": ["U.S. Department of the Treasury"],
+        "Investment Accountant": ["BlackRock"],
+        "CPA (Certified Public Accountant)": ["AICPA (American Institute of CPAs)"],
+        }
+
+    def _create_default_model(self):
+        """Create a default model when the saved model can't be loaded"""
+        # Create a simple RandomForestClassifier as default
+        model = RandomForestClassifier(n_estimators=100, random_state=42)
+        
+        # Fit model with minimal sample data so it can make predictions
+        sample_features = np.random.rand(5, 10)  # 5 samples, 10 features
+        sample_labels = np.random.randint(0, len(self.job_titles) if hasattr(self, 'job_titles') else 14, size=5)
+        model.fit(sample_features, sample_labels)
+        
+        return model
 
     def extract_text_from_resume(self, file_path):
-        """
-        Extract text from PDF or DOCX resume files.
-        
-        Args:
-            file_path (str): Path to the resume file
-            
-        Returns:
-            str: Extracted text from the resume
-            
-        Raises:
-            ValueError: If the file format is not supported
-        """
+        """Extract text from PDF, DOCX or TXT resume files."""
         if not os.path.exists(file_path):
-            raise FileNotFoundError(f"Resume file not found: {file_path}")
+            print(f"Resume file not found: {file_path}")
+            return ""
             
-        if file_path.lower().endswith(".pdf"):
-            try:
+        try:
+            if file_path.lower().endswith(".pdf"):
+                print(f"Extracting text from PDF: {file_path}")
                 with pdfplumber.open(file_path) as pdf:
-                    return "\n".join(page.extract_text() or "" for page in pdf.pages)
-            except Exception as e:
-                raise ValueError(f"Error extracting text from PDF: {e}")
-        elif file_path.lower().endswith(".docx"):
-            try:
+                    text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+                    if not text.strip():
+                        print("Warning: PDF text extraction returned empty content")
+                    return text
+                    
+            elif file_path.lower().endswith(".docx"):
+                print(f"Extracting text from DOCX: {file_path}")
                 doc = docx.Document(file_path)
                 return "\n".join(paragraph.text for paragraph in doc.paragraphs)
-            except Exception as e:
-                raise ValueError(f"Error extracting text from DOCX: {e}")
-        else:
-            raise ValueError("Unsupported file format. Only .pdf and .docx are supported.")
-
-    def preprocess_resume(self, resume_text):
-        """
-        Preprocess resume text using the trained TF-IDF vectorizer.
-        
-        Args:
-            resume_text (str): Raw text extracted from the resume
-            
-        Returns:
-            numpy.ndarray: Feature vector for model prediction
-        """
-        try:
-            features = self.vectorizer.transform([resume_text]).toarray()
-            return features
-        except Exception as e:
-            print(f"Error during preprocessing: {e}")
-            # Return zeros array matching the expected input shape
-            return np.zeros((1, self.model.input_shape[1]))
-
-    def get_top_job_recommendations(self, resume_text, top_n=3):
-        """
-        Get top job recommendations based on resume text.
-        
-        Args:
-            resume_text (str): Preprocessed resume text
-            top_n (int): Number of top recommendations to return
-            
-        Returns:
-            list: List of dictionaries containing job titles and confidence scores
-        """
-        features = self.preprocess_resume(resume_text)
-        
-        try:
-            predictions = self.model.predict(features)
-            # Ensure top_n doesn't exceed the number of job categories
-            top_n = min(top_n, len(self.job_titles))
-            # Get indices of top predictions
-            top_indices = np.argsort(predictions[0])[-top_n:][::-1]
-            
-            return [
-                {
-                    "job_title": self.job_titles.get(str(idx), f"Job Category {idx+1}"),
-                    "confidence": float(predictions[0][idx])
-                }
-                for idx in top_indices
-            ]
-        except Exception as e:
-            print(f"Error during prediction: {e}")
-            return [{"job_title": "Error in prediction", "confidence": 0.0}]
-
-    def get_training_courses(self, job_title, resume_text):
-        """
-        Get recommended training courses for a specific job title using Gemini API.
-        
-        Args:
-            job_title (str): The job title to get courses for
-            resume_text (str): Resume text to provide context
-            
-        Returns:
-            list: List of recommended courses
-        """
-        if not self.gemini_api_key:
-            return [{"course_name": "API Key Missing", 
-                    "provider": "N/A", 
-                    "description": "No Gemini API key provided in environment variables.",
-                    "url": "",
-                    "relevance": "Please set the VITE_GEMINI_API_KEY environment variable."}]
-        
-        prompt = f"""
-        Based on this resume: 
-        
-        {resume_text}
-        
-        I need 3 specific training courses available online that would help this person qualify for a {job_title} position.
-        
-        For each course, provide:
-        1. Course name
-        2. Provider (website/platform)
-        3. Brief description of what skills it will teach
-        4. URL if available
-        5. Why it's relevant for this specific job
-        
-        Format as a JSON list with course name, provider, description, url, and relevance fields.
-        """
-        
-        headers = {
-            "Content-Type": "application/json",
-            "x-goog-api-key": self.gemini_api_key
-        }
-        
-        data = {
-            "contents": [{"parts": [{"text": prompt}]}]
-        }
-        
-        try:
-            response = requests.post(self.gemini_api_url, headers=headers, json=data)
-            if response.status_code == 200:
-                response_data = response.json()
-                text_response = response_data["candidates"][0]["content"]["parts"][0]["text"]
-                try:
-                    # Try to extract JSON from the response
-                    json_start = text_response.find('[')
-                    json_end = text_response.rfind(']') + 1
-                    if json_start >= 0 and json_end > 0:
-                        json_content = text_response[json_start:json_end]
-                        return json.loads(json_content)
-                    else:
-                        return self._extract_courses_from_text(text_response)
-                except json.JSONDecodeError:
-                    return self._extract_courses_from_text(text_response)
+                
+            elif file_path.lower().endswith(".txt"):
+                print(f"Reading text file: {file_path}")
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    return f.read()
             else:
-                error_msg = f"Error calling Gemini API: {response.status_code}"
-                try:
-                    error_detail = response.json().get("error", {}).get("message", "Unknown error")
-                    error_msg += f" - {error_detail}"
-                except:
-                    error_msg += f" - {response.text[:100]}"
-                    
-                return [{
-                    "course_name": "API Error", 
-                    "provider": "N/A", 
-                    "description": error_msg,
-                    "url": "",
-                    "relevance": "Please check your API key and network connection."
-                }]
+                print("Unsupported file format. Only .pdf, .docx, and .txt are supported.")
+                return ""
         except Exception as e:
-            return [{
-                "course_name": "Exception", 
-                "provider": "N/A", 
-                "description": f"Exception when calling Gemini API: {str(e)}",
-                "url": "",
-                "relevance": "Please check your network connection."
-            }]
+            print(f"Error extracting text from {file_path}: {e}")
+            return ""
 
-    def _extract_courses_from_text(self, text):
-        """
-        Extract course information from non-JSON formatted text.
+    def extract_skills_from_resume(self, resume_text):
+        """Extract skills from resume text using the job skills dictionary"""
+        resume_text = resume_text.lower()
+        extracted_skills = set()
         
-        Args:
-            text (str): Text response from Gemini API
-            
-        Returns:
-            list: List of course dictionaries
-        """
-        courses = []
-        sections = []
-        current_section = ""
-        lines = text.split('\n')
+        # First pass: Look for exact matches of multi-word skills
+        for job_title, skills in self.job_skills.items():
+            for skill in skills:
+                if len(skill.split()) > 1:  # Only check multi-word skills
+                    if skill.lower() in resume_text:
+                        extracted_skills.add(skill)
+                        
+        # Second pass: Look for single word skills with word boundaries
+        for job_title, skills in self.job_skills.items():
+            for skill in skills:
+                if len(skill.split()) == 1:  # Only check single-word skills
+                    # Use regex word boundary to avoid partial matches
+                    if re.search(r'\b' + re.escape(skill.lower()) + r'\b', resume_text):
+                        extracted_skills.add(skill)
         
-        # Split text into course sections
-        for line in lines:
-            if line.strip().startswith(('1.', '2.', '3.', 'Course 1:', 'Course 2:', 'Course 3:')):
-                if current_section:
-                    sections.append(current_section)
-                current_section = line
-            elif current_section:
-                current_section += "\n" + line
-        
-        if current_section:
-            sections.append(current_section)
-        
-        # Extract course information from each section
-        for section in sections:
-            course = {
-                "course_name": "Unknown Course",
-                "provider": "Unknown Provider",
-                "description": section,
-                "url": "",
-                "relevance": ""
-            }
-            
-            for line in section.split('\n'):
-                line = line.strip()
-                if "course" in line.lower() or "name" in line.lower():
-                    parts = line.split(':', 1)
-                    if len(parts) > 1:
-                        course["course_name"] = parts[1].strip()
-                elif "provider" in line.lower():
-                    parts = line.split(':', 1)
-                    if len(parts) > 1:
-                        course["provider"] = parts[1].strip()
-                elif "description" in line.lower():
-                    parts = line.split(':', 1)
-                    if len(parts) > 1:
-                        course["description"] = parts[1].strip()
-                elif "url" in line.lower() or "http" in line.lower():
-                    parts = line.split(':', 1)
-                    if len(parts) > 1:
-                        course["url"] = parts[1].strip()
-                elif "relevan" in line.lower():
-                    parts = line.split(':', 1)
-                    if len(parts) > 1:
-                        course["relevance"] = parts[1].strip()
-            
-            courses.append(course)
-        
-        return courses[:3]  # Return at most 3 courses
+        return list(extracted_skills)
 
-    def process_resume_file(self, file_path):
-        """
-        Process a resume file to get job recommendations and training courses.
+    def get_recommendations(self, resume_file_path):
+        """Process resume and get job recommendations"""
+        print(f"Processing resume: {resume_file_path}")
         
-        Args:
-            file_path (str): Path to the resume file
+        resume_text = self.extract_text_from_resume(resume_file_path)
+        
+        if not resume_text:
+            print("Failed to extract text from resume!")
+            return {"error": "Failed to extract text from resume"}
+        
+        print(f"Extracted {len(resume_text)} characters from resume")
+        
+        # Extract skills from resume
+        extracted_skills = self.extract_skills_from_resume(resume_text)
+        print(f"Extracted skills: {extracted_skills}")
+        
+        # Always use our improved keyword-based matching using the extracted text
+        keyword_recommendations = self.get_improved_keyword_recommendations(resume_text, extracted_skills)
+        
+        # Format recommendations with the extracted skills
+        formatted_recommendations = self.format_recommendations_with_skills(
+            resume_text=resume_text,
+            filename=os.path.basename(resume_file_path),
+            recommendations=keyword_recommendations["recommendations"],
+            extracted_skills=extracted_skills
+        )
+        
+        # Return full results including formatted recommendations
+        return {
+            "resume_text": resume_text,
+            "extracted_skills": extracted_skills,
+            "recommendations": keyword_recommendations["recommendations"],
+            "formatted_recommendations": formatted_recommendations
+        }
+    
+    def get_improved_keyword_recommendations(self, resume_text, extracted_skills):
+        """Improved keyword analysis for job matching using extracted resume text and skills"""
+        print("Starting improved keyword recommendations analysis...")
+        
+        # Initialize job scores dictionary
+        job_scores = {}
+        resume_text_lower = resume_text.lower()
+        
+        # Score each job category based on the extracted skills
+        for job_title, job_skills in self.job_skills.items():
+            # Start with a base score of 0
+            job_scores[job_title] = 0
             
-        Returns:
-            dict: Dictionary containing job recommendations and training courses
-        """
+            # Score based on extracted skills matching job skills
+            relevant_skills = []
+            for skill in extracted_skills:
+                if skill.lower() in (s.lower() for s in job_skills):
+                    job_scores[job_title] += 1
+                    relevant_skills.append(skill)
+            
+            # Extra points for job title mention
+            if job_title.lower() in resume_text_lower:
+                job_scores[job_title] += 5
+                print(f"Found job title mention: {job_title}")
+            
+            # Add slight boost for related terms
+            for skill in job_skills:
+                if skill.lower() in resume_text_lower:
+                    job_scores[job_title] += 0.5
+            
+            print(f"Job {job_title}: Score {job_scores[job_title]}, Relevant skills: {relevant_skills}")
+        
+        # Sort jobs by score in descending order
+        sorted_jobs = sorted(job_scores.items(), key=lambda x: x[1], reverse=True)
+        
+        # Create recommendations for top 3 jobs
+        recommendations = []
+        for job, score in sorted_jobs[:3]:
+            # Calculate confidence - normalize from 0.5 to 0.95 based on scores
+            max_possible_score = max(20, max(s for _, s in sorted_jobs))  # Set minimum ceiling
+            confidence = 0.5 + ((score / max_possible_score) * 0.45)
+            confidence = min(0.95, max(0.5, confidence))  # Clamp between 0.5 and 0.95
+            
+            # Add to recommendations
+            recommendations.append({
+                "job_title": job,
+                "confidence": round(confidence, 2),
+                "score": score,
+                "matching_skills": [skill for skill in extracted_skills 
+                                   if skill.lower() in (s.lower() for s in self.job_skills[job])]
+            })
+        
+        return {
+            "resume_text": resume_text[:300] + ("..." if len(resume_text) > 300 else ""),
+            "recommendations": recommendations,
+            "method": "improved-keyword-based"
+        }
+    
+    def format_recommendations_with_skills(self, resume_text, filename, recommendations, extracted_skills):
+        """Format recommendations with actual extracted skills from the resume text"""
+        if not recommendations:
+            return {"error": "No recommendations available"}
+        
+        # Format the job recommendations
+        job_recommendations = []
+        for i, job in enumerate(recommendations):
+            job_title = job["job_title"]
+            matching_skills = job.get("matching_skills", [])
+            
+            # If we have matching skills, use them; otherwise, use default skills
+            if matching_skills:
+                # Capitalize the first letter of each skill for display purposes
+                present_skills = [skill.title() if skill.islower() else skill for skill in matching_skills]
+                
+                # Limit to 4 skills maximum
+                if len(present_skills) > 4:
+                    present_skills = present_skills[:4]
+                # If fewer than 2 skills, add some generic ones
+                elif len(present_skills) < 2:
+                    present_skills.extend(["Communication", "Problem Solving"][:2 - len(present_skills)])
+            else:
+                # Use default skills if no matches
+                present_skills = ["Communication", "Problem Solving", "Teamwork", "Adaptability"]
+            
+            # Get missing skills for this job title
+            missing_skills = self.missing_skills_mapping.get(job_title, 
+                                              ["Leadership", "Advanced Technical Skills", "Project Management"])
+            
+            # Get company name
+            company = self.company_mapping.get(job_title, f"Company {i+1}")
+            
+            # Calculate match percentage
+            match_percent = int(job["confidence"] * 100)
+            
+            # Format the job recommendation
+            job_recommendations.append({
+                "title": job_title,
+                "company": company,
+                "match": f"{match_percent}% Match",
+                "description": f"This role matches your resume profile and skills.",
+                "skills": present_skills,
+                "learningPath": [
+                    {
+                        "title": f"Advanced {missing_skills[0]} Course",
+                        "provider": "Professional Learning Center",
+                        "difficulty": "Intermediate",
+                        "description": "Enhance your career prospects with this essential skill."
+                    },
+                    {
+                        "title": f"{job_title} Certification",
+                        "provider": "Industry Academy",
+                        "difficulty": "Advanced",
+                        "description": "Get certified in key technologies for this role."
+                    }
+                ]
+            })
+        
+        # Generate AI insights based on extracted skills and top recommendation
+        if job_recommendations and extracted_skills:
+            top_job = job_recommendations[0]
+            top_job_title = top_job["title"]
+            
+            # Get top skills to mention (limit to 3)
+            top_skills = top_job["skills"][:3] if len(top_job["skills"]) > 3 else top_job["skills"]
+            
+            # Get missing skills for this job
+            missing_skills = self.missing_skills_mapping.get(top_job_title, 
+                                              ["Leadership", "Advanced Technical Skills", "Project Management"])
+            missing_skills = missing_skills[:3]  # Limit to 3
+            
+            # Generate insights
+            ai_insights = f"Based on your resume, you have a strong foundation in {', '.join(top_skills)}. "
+            ai_insights += f"To increase your prospects as a {top_job_title}, consider developing skills in {', '.join(missing_skills)}."
+        else:
+            ai_insights = "Based on your resume, consider developing additional technical and soft skills to improve your job prospects."
+        
+        # Return formatted recommendations
+        return {
+            "jobRecommendations": job_recommendations,
+            "aiInsights": ai_insights
+        }
+
+
+# Create Flask application
+app = Flask(__name__)
+CORS(app)
+
+# Initialize job recommendation system
+job_system = JobRecommendationSystem()
+
+@app.route('/upload_resume', methods=['POST'])
+def upload_resume():
+    """
+    Accepts a resume file uploaded by the user and returns job recommendations.
+    
+    Expected form data:
+    - resume_file: File upload
+    """
+    try:
+        if 'resume_file' not in request.files:
+            return jsonify({'error': 'No resume file uploaded'}), 400
+            
+        resume_file = request.files['resume_file']
+        
+        if resume_file.filename == '':
+            return jsonify({'error': 'Empty filename'}), 400
+            
+        # Save the uploaded resume temporarily
+        temp_path = f"uploads/{resume_file.filename}"
+        os.makedirs("uploads", exist_ok=True)  # Ensure the directory exists
+        resume_file.save(temp_path)
+        
+        # Get job recommendations
+        result = job_system.get_recommendations(temp_path)
+        
+        # Clean up temp file
         try:
-            resume_text = self.extract_text_from_resume(file_path)
-            job_recommendations = self.get_top_job_recommendations(resume_text)
-            
-            results = []
-            for job in job_recommendations:
-                job_title = job["job_title"]
-                courses = self.get_training_courses(job_title, resume_text)
-                results.append({
-                    "job_title": job_title,
-                    "confidence": job["confidence"],
-                    "training_courses": courses
-                })
-            
-            return {"recommendations": results}
+            os.remove(temp_path)
         except Exception as e:
-            return {"error": str(e)}
+            print(f"Warning: Could not remove temp file: {e}")
+        
+        return jsonify(result)
+    except Exception as e:
+        print(f"Error processing uploaded resume: {e}")
+        return jsonify({'error': 'Internal server error', 'message': str(e)}), 500
 
-
-# Example usage
 if __name__ == "__main__":
-    # Example job titles mapping (you should create a proper mapping file)
-    example_job_mapping = {
-        "0": "Data Scientist",
-        "1": "Software Engineer",
-        "2": "Product Manager",
-        "3": "UX Designer",
-        "4": "DevOps Engineer"
-    }
-    
-    # Save example mapping if it doesn't exist
-    if not os.path.exists("job_titles.json"):
-        with open("job_titles.json", "w") as f:
-            json.dump(example_job_mapping, f, indent=2)
-    
-    print("\n=== Job Recommendation System ===")
-    print("This script requires three files to run properly:")
-    print("1. A TensorFlow model file (.h5)")
-    print("2. A trained TF-IDF vectorizer (.pkl)")
-    print("3. A resume file to analyze (.pdf or .docx)")
-    print("\nIf you're getting errors, try the fallback mode which bypasses model loading.")
-    
-    use_fallback = input("\nDo you want to use fallback mode? (yes/no): ").lower().startswith('y')
-    
-    if use_fallback:
-        print("\n=== Running in Fallback Mode ===")
-        
-        # Scan for PDF and DOCX files in the current directory and subdirectories
-        print("\nScanning for resume files (PDF/DOCX)...")
-        resume_files = []
-        for root, _, files in os.walk('.'):
-            for file in files:
-                if file.lower().endswith(('.pdf', '.docx')):
-                    file_path = os.path.join(root, file)
-                    resume_files.append(file_path)
-        
-        if resume_files:
-            print("\nFound the following resume files:")
-            for i, file_path in enumerate(resume_files):
-                print(f"{i+1}. {file_path}")
-            
-            try:
-                choice = int(input("\nEnter the number of the file to analyze (or 0 to enter path manually): "))
-                if 1 <= choice <= len(resume_files):
-                    resume_file_path = resume_files[choice-1]
-                else:
-                    resume_file_path = input("Enter the path to the resume file to analyze: ")
-            except ValueError:
-                resume_file_path = input("Enter the path to the resume file to analyze: ")
-        else:
-            print("No PDF or DOCX files found in the current directory or subdirectories.")
-            resume_file_path = input("Enter the path to the resume file to analyze: ")
-        
-        # Verify file exists
-        if not os.path.exists(resume_file_path):
-            print(f"\nERROR: File not found: {resume_file_path}")
-            print("Please make sure the file exists and the path is correct.")
-            print("Would you like to create a dummy resume file for testing? (yes/no)")
-            create_dummy = input().lower().startswith('y')
-            
-            if create_dummy:
-                dummy_resume_path = "./dummy_resume.txt"
-                with open(dummy_resume_path, "w") as f:
-                    f.write("""
-JOHN DOE
-Software Engineer
-john.doe@example.com | (123) 456-7890 | linkedin.com/in/johndoe
+    print("\n===== JOB RECOMMENDATION SYSTEM API =====\n")
+    print("Waiting for user resume uploads...")
 
-SUMMARY
-Experienced software engineer with 5+ years of experience in Python, JavaScript, and machine learning technologies.
-Skilled in developing REST APIs, web applications, and data processing pipelines.
-
-EXPERIENCE
-Senior Software Engineer | TechCorp Inc. | 2023-Present
-- Developed a machine learning pipeline that improved data processing efficiency by 35%
-- Implemented RESTful APIs using Flask and FastAPI
-- Led a team of 3 junior developers on a customer-facing web application project
-
-Software Engineer | DataSoft Solutions | 2020-2023
-- Created Python scripts for data analysis and visualization
-- Built a React-based dashboard for real-time data monitoring
-- Collaborated with data scientists to implement ML models in production
-
-EDUCATION
-Master of Science in Computer Science | State University | 2020
-Bachelor of Science in Software Engineering | Tech Institute | 2018
-
-SKILLS
-- Programming: Python, JavaScript, Java, SQL
-- Frameworks: React, Flask, FastAPI, TensorFlow
-- Tools: Git, Docker, Kubernetes, AWS
-- Soft Skills: Team Leadership, Project Management, Communication
-                    """)
-                resume_file_path = dummy_resume_path
-                print(f"Created dummy resume at {dummy_resume_path}")
-            else:
-                print("Exiting program due to missing file.")
-                exit(1)
-        
-        # Create a minimal system that doesn't use the actual model
-        class FallbackSystem:
-            def extract_text_from_resume(self, file_path):
-                if file_path.lower().endswith(".pdf"):
-                    try:
-                        with pdfplumber.open(file_path) as pdf:
-                            return "\n".join(page.extract_text() or "" for page in pdf.pages)
-                    except Exception as e:
-                        return f"Error extracting text: {e}"
-                elif file_path.lower().endswith(".docx"):
-                    try:
-                        doc = docx.Document(file_path)
-                        return "\n".join(paragraph.text for paragraph in doc.paragraphs)
-                    except Exception as e:
-                        return f"Error extracting text: {e}"
-                elif file_path.lower().endswith(".txt"):
-                    try:
-                        with open(file_path, 'r') as f:
-                            return f.read()
-                    except Exception as e:
-                        return f"Error reading text file: {e}"
-                else:
-                    return "Unsupported file format. Only .pdf, .docx, and .txt are supported."
-            
-            def process_resume_file(self, file_path):
-                resume_text = self.extract_text_from_resume(file_path)
-                
-                # Basic keyword analysis for fallback job matching
-                keywords = {
-                    "Data Scientist": ["data science", "machine learning", "python", "statistics", "analytics", "data analysis", "pandas", "numpy", "sklearn"],
-                    "Software Engineer": ["software", "programming", "development", "java", "python", "javascript", "code", "algorithm", "api"],
-                    "Product Manager": ["product", "management", "strategy", "roadmap", "agile", "scrum", "user experience", "prioritization"],
-                    "UX Designer": ["design", "user experience", "ux", "ui", "wireframe", "prototype", "usability", "sketch", "figma"],
-                    "DevOps Engineer": ["devops", "ci/cd", "pipeline", "aws", "cloud", "docker", "kubernetes", "infrastructure"]
-                }
-                
-                # Count keyword matches for each job
-                job_scores = {}
-                resume_text_lower = resume_text.lower()
-                for job, terms in keywords.items():
-                    score = sum(resume_text_lower.count(term.lower()) for term in terms)
-                    job_scores[job] = score
-                
-                # Sort by score
-                sorted_jobs = sorted(job_scores.items(), key=lambda x: x[1], reverse=True)
-                
-                # Create recommendations
-                recommendations = []
-                for job, score in sorted_jobs[:3]:  # Top 3 jobs
-                    # Normalize score to a confidence between 0.5 and 0.95
-                    confidence = min(0.95, max(0.5, 0.5 + (score / 10)))
-                    
-                    recommendations.append({
-                        "job_title": job,
-                        "confidence": round(confidence, 2),
-                        "training_courses": [
-                            {
-                                "course_name": f"{job} Fundamentals",
-                                "provider": "Coursera",
-                                "description": f"Comprehensive training for {job} roles",
-                                "url": "https://www.coursera.org",
-                                "relevance": "Core professional skills"
-                            }
-                        ]
-                    })
-                
-                return {
-                    "resume_text": resume_text[:500] + ("..." if len(resume_text) > 500 else ""),
-                    "recommendations": recommendations
-                }
-        
-        try:
-            system = FallbackSystem()
-            result = system.process_resume_file(resume_file_path)
-            print("\nExtracted text sample from resume:")
-            print(result["resume_text"])
-            print("\nRecommendations (based on basic keyword matching):")
-            print(json.dumps({"recommendations": result["recommendations"]}, indent=2))
-            print("\nNOTE: These recommendations use basic keyword matching only. The ML model was not used.")
-        except Exception as e:
-            print(f"Error in fallback mode: {e}")
-    else:
-        # Set the correct paths for your files
-        model_path = input("Enter the path to your model file (e.g., ./your_model.h5): ./model3.h5")
-        vectorizer_path = input("Enter the path to your vectorizer file (e.g., ./vectorizer.pkl): ./vectorizer.py")
-        resume_file_path = input("Enter the path to the resume file to analyze: ./10553553.pdf")
-        
-        try:
-            job_system = JobRecommendationSystem(
-                model_path=model_path,
-                vectorizer_path=vectorizer_path
-            )
-            result = job_system.process_resume_file(resume_file_path)
-            print(json.dumps(result, indent=2))
-        except Exception as e:
-            print(f"Error: {e}")
-            print("\nTry running the script again and selecting fallback mode to test resume parsing.")
+    # Start Flask server
+    app.run(port=5000, debug=True)

@@ -1,0 +1,10 @@
+import pickle
+from tensorflow.keras.preprocessing.text import Tokenizer
+
+# Example: Assume you used 10,000 most common words during training
+tokenizer = Tokenizer(num_words=10000)
+tokenizer.fit_on_texts(your_training_data)  # Replace with actual resume text dataset
+
+# Save tokenizer to a file
+with open("tokenizer.pkl", "wb") as f:
+    pickle.dump(tokenizer, f)

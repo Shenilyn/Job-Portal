@@ -10,7 +10,12 @@ import Resume from "./Resume";
 import JobMatches from "./JobMatches";
 import './App.css';
 import About from "./About";
+import Privacy from "./privacy"; 
+import Terms from "./terms"; 
+import Contact from "./contact";
 import VerifyEmail from "./verifyEmail"; // Import the verification page
+import ML_prediction from "./ML_prediction";
+
 
 const router = createBrowserRouter([
   {
@@ -56,6 +61,22 @@ const router = createBrowserRouter([
   {
     path: "/about",
     element: <About />,
+  },
+  {
+    path: "/privacy",
+    element: <Privacy />, // Route for the Privacy Policy page
+  },
+  {
+    path: "/terms",
+    element: <Terms />, 
+  },
+  {
+    path: "/contact",
+    element: <Contact />, 
+  },
+  {
+    path: "/ML_prediction",
+    element: <ML_prediction />, 
   },
 ]);
 
