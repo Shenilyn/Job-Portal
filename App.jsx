@@ -5,7 +5,7 @@ import Home from "./Home";
 import NotFound from "./NotFound";
 import Dashboard from "./Dashboard";
 import LearningPath from "./LearningPath";
-import Settings from "./Settings";
+import Profile from "./Profile";
 import Resume from "./Resume";
 import JobMatches from "./JobMatches";
 import './App.css';
@@ -47,8 +47,8 @@ const router = createBrowserRouter([
     element: <Dashboard />,
   }, 
   {
-    path: "/settings",
-    element: <Settings />,
+    path: "/profile",
+    element: <Profile />,
   },
   {
     path: "/resume",
